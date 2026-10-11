@@ -30,7 +30,7 @@
       "favicon": "./assets/favicon.png"
     },
     "description": "DAI Miner Wallet - Real crypto wallet for the Decentralized Artificial Intelligence network",
-    "githubUrl": "https://github.com/your-org/poh-miner",
+    "githubUrl": "https://github.com/iamaihub/dai-miner",
     "extra": {
       "eas": {
         "projectId": "2755d9de-0219-47c3-b393-4bade5b8515f"
