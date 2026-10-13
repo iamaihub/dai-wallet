@@ -161,6 +161,34 @@ function renderMarkdown(text) {
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS  = 120_000;
 
+// Cycled through the typing-indicator status text while waiting on a request with
+// no real progress signal (askNode / job submit) — mirrors dev/node's chat cascade
+// animation so both apps show the same vocabulary during an otherwise-silent wait.
+const CASCADE_STATUS_WORDS = [
+  'Processing', 'Computing', 'Analyzing', 'Synthesizing', 'Reasoning', 'Evaluating',
+  'Generating', 'Orchestrating', 'Coordinating', 'Executing', 'Assembling', 'Resolving',
+  'Inferring', 'Deliberating', 'Formulating', 'Crafting', 'Building', 'Compiling',
+  'Integrating', 'Orchestrating cascade', 'Running cascade', 'Activating cascade',
+  'Launching cascade', 'Spinning up cascade', 'Cascading', 'Chaining', 'Sequencing',
+  'Delegating', 'Routing', 'Dispatching', 'Invoking', 'Querying', 'Fetching',
+  'Gathering', 'Collecting', 'Retrieving', 'Consulting', 'Consulting tools',
+  'Consulting skills', 'Calling tools', 'Calling MCPs', 'Invoking skills',
+  'Coordinating agents', 'Multi-step reasoning', 'Multi-agent flow', 'Tool orchestration',
+  'Skill cascade', 'MCP cascade', 'Parallel processing', 'Sequential processing',
+  'Deep analysis', 'Structured reasoning', 'Stepwise execution', 'Workflow running',
+  'Pipeline active', 'Graph executing', 'Nodes processing', 'Tasks in flight',
+  'Subtasks running', 'Background work', 'In progress', 'Still working', 'Almost there',
+  'Finalizing', 'Wrapping up', 'Assembling response', 'Compiling results',
+  'Synthesizing output', 'Drafting answer', 'Refining', 'Polishing', 'Validating',
+  'Cross-checking', 'Verifying', 'Double-checking', 'Connecting dots', 'Weaving together',
+  'Piecing together', 'Mapping dependencies', 'Resolving dependencies', 'Expanding context',
+  'Enriching', 'Augmenting', 'Grounding', 'Citing', 'Attributing', 'Reasoning chain',
+  'Thought process', 'Internal monologue', 'Active inference', 'Latent computation',
+  'Model thinking', 'Agent thinking', 'Cascade thinking', 'Working…', 'Thinking…',
+  'Computing…', 'Processing cascade…', 'Cascade in motion', 'Result incoming',
+];
+const randomStatusWord = () => CASCADE_STATUS_WORDS[Math.floor(Math.random() * CASCADE_STATUS_WORDS.length)];
+
 // ── Main screen ───────────────────────────────────────────────────────────────
 export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress, balances, getPrivateKey }) {
   const [message,    setMessage]    = useState('');
@@ -170,6 +198,22 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
   const [feeCurrency, setFeeCurrency] = useState('DAI');
   const [loading,    setLoading]    = useState(false);
   const [statusText, setStatusText] = useState('');
+  // Cycles statusText through CASCADE_STATUS_WORDS while a request has no real
+  // progress to report; stopCascadeWords() must run before setting a specific
+  // status (e.g. "Computing... (status)") so the interval can't clobber it.
+  const cascadeWordTimer = useRef(null);
+  const stopCascadeWords = useCallback(() => {
+    if (cascadeWordTimer.current) {
+      clearInterval(cascadeWordTimer.current);
+      cascadeWordTimer.current = null;
+    }
+  }, []);
+  const startCascadeWords = useCallback(() => {
+    stopCascadeWords();
+    setStatusText(randomStatusWord());
+    cascadeWordTimer.current = setInterval(() => setStatusText(randomStatusWord()), 1800);
+  }, [stopCascadeWords]);
+  useEffect(() => stopCascadeWords, [stopCascadeWords]); // clear on unmount
   // Messenger-style conversation: [{ id, role: 'user'|'ai', text?, error?, ...skill fields }]
   const [messages,   setMessages]   = useState([]);
   const [attachedFile, setAttachedFile] = useState(null); // { name, kind, content?|dataUrl?, mime?, size? }
@@ -360,8 +404,10 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
     setLoading(true);
 
     try {
-      setStatusText(atts?.length ? 'Reading attachment…' : 'Thinking...');
+      if (atts?.length) setStatusText('Reading attachment…');
+      else startCascadeWords();
       let { data: askData, base, datasetRequired } = await askNode(q, { attachments: atts });
+      stopCascadeWords();
 
       // Dataset approval loop (matches desktop HF_DATASET_DOWNLOAD_REQUIRED flow)
       if (datasetRequired && askData.datasetId) {
@@ -382,8 +428,9 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
         }
         setStatusText(`Downloading ${askData.datasetId}…`);
         await downloadDatasetOnNode(base, askData.datasetId);
-        setStatusText('Answering with dataset…');
+        startCascadeWords();
         ({ data: askData, base } = await askNode(q, { attachments: atts, datasetId: askData.datasetId }));
+        stopCascadeWords();
       }
 
       // Free chat / cascade / inline skill / hf-model all return type:'chat' with a message
@@ -470,7 +517,7 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
         secretKey,
       });
 
-      setStatusText('Submitting job...');
+      startCascadeWords();
       const jobRes = await fetch(`${base}/job`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -482,6 +529,7 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
           paymentTx,
         }),
       });
+      stopCascadeWords(); // the polling loop below owns statusText from here (real status per tick)
       const jobRef = await jobRes.json();
       if (!jobRes.ok || !jobRef.jobId) throw new Error(jobRef.error || 'Failed to submit job.');
 
@@ -513,6 +561,7 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
       pushMsg({ role: 'ai', error: true, text: err.message || 'Something went wrong.' });
       setStatusText('');
     } finally {
+      stopCascadeWords(); // safety net for any early return/throw that skipped its own stop call
       setLoading(false);
     }
   };
