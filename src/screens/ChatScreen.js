@@ -287,7 +287,11 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
     const match = await fetchHistoryMatch(activeNodeUrl, { q, wallet: selectedAddress });
     if (match?.reply) {
       pushMsg({ role: 'user', text: q });
-      pushMsg({ role: 'ai', type: 'chat', text: match.reply, fromChainHistory: true });
+      pushMsg({
+        role: 'ai', type: 'chat', text: match.reply, fromChainHistory: true,
+        jobId: match.jobId || `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        feedbackPrompt: q,
+      });
       setMessage('');
       setHistoryBanner(null);
       setSuggestions([]);
@@ -449,6 +453,10 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
           cascade: !!(askData.cascade || askData.tasks),
           skill: askData.skill,
           headerLabel: label,
+          // No paid /job backs most chat/cascade replies, so mint a client-side id —
+          // the feedback endpoint accepts prompt+reply as a fallback for one of these.
+          jobId: askData.jobId || `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          feedbackPrompt: q,
         });
         setSuggestions([]);
         setHistoryBanner(null);
@@ -623,6 +631,11 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
           stars: fbStars,
           comment: fbComment.trim().slice(0, FEEDBACK_COMMENT_MAX),
           requesterAddress: selectedAddress,
+          // Fallback for replies with no backend job record (most chat/cascade
+          // answers) — the node uses these to teach the brain directly instead
+          // of 404ing for lack of a job to look the text up from.
+          prompt: fbTarget.feedbackPrompt || undefined,
+          reply: fbTarget.text || undefined,
         }),
       });
       if (!res.ok) {
@@ -678,6 +691,10 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
       );
     }
     const isSkill = msg.type === 'skill';
+    // Feedback is keyed on jobId, not message type — every answer gets a jobId now
+    // (a real one for paid skill/compute jobs, a client-minted one otherwise), so
+    // this is no longer restricted to skill replies.
+    const canRate = !!msg.jobId;
     return (
       <View key={msg.id} style={[s.bubbleRow, s.bubbleRowAi]}>
         <View style={[s.bubble, s.bubbleAi]}>
@@ -697,7 +714,7 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
 
           {msg.text ? renderMarkdown(msg.text) : renderSkillOutput(msg.output)}
 
-          {isSkill && (
+          {canRate && (
             msg.feedback ? (
               <Text style={s.feedbackDone}>
                 Thanks! {'★'.repeat(msg.feedback)}{'☆'.repeat(5 - msg.feedback)}
