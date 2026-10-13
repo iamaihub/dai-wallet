@@ -397,6 +397,111 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
     return d;
   }
 
+  // Submits a real, paid, gossiped job (skill or compute) for `q`, polls for
+  // completion, and renders the result. The wallet has no Private mode — every
+  // message takes this path, mirroring dev/node's submitComputeJob/
+  // _submitSkillJob (same /job + poll + settle flow, same backend).
+  async function submitPaidJob(q, base, { type, skillId, payload, atts, datasetId, labelHint } = {}) {
+    if (!selectedAddress) { pushMsg({ role: 'ai', error: true, text: 'Select a wallet to pay the job fee.' }); return; }
+    const feeDecimals = feeCurrency === 'DAI' ? 1_000_000_000 : 100;
+    const maxBudget = Math.max(1, Math.round(budget * feeDecimals));
+    if (feeCurrency === 'DAI' && budget > balance) { pushMsg({ role: 'ai', error: true, text: `Insufficient balance: ${balance.toFixed(2)} DAI available.` }); return; }
+
+    // Fee-required job types need a signed payment proof (paymentTx) bound to
+    // jobId + miner + amount + nonce — the node rejects them with 402 otherwise.
+    setStatusText('Signing fee payment...');
+    const privateKeyHex = getPrivateKey ? await getPrivateKey(selectedAddress) : null;
+    if (!privateKeyHex) { pushMsg({ role: 'ai', error: true, text: 'Private key not found for this wallet.' }); return; }
+    const { secretKey, signingPublicKey } = await deriveSigningKeypair(privateKeyHex);
+
+    // Register signing key (idempotent) so the node can verify the proof
+    try {
+      await fetch(`${base}/api/wallet/register-key`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: selectedAddress, signingPublicKey, proof: signData(selectedAddress, secretKey) }),
+      });
+    } catch { /* non-fatal — submit will fail with a clear error if key missing */ }
+
+    const infoRes = await fetch(`${base}/api/miner/info`);
+    const info = await infoRes.json();
+    if (!info.minerAddress) throw new Error('Could not fetch miner address for payment proof.');
+
+    const nonceRes = await fetch(`${base}/api/wallet/nonce?address=${encodeURIComponent(selectedAddress)}`);
+    const nonceData = await nonceRes.json();
+    if (nonceData.error) throw new Error(nonceData.error);
+
+    const clientJobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const paymentTx = await buildJobPaymentTx({
+      jobId: clientJobId,
+      requesterAddress: selectedAddress,
+      minerAddress: info.minerAddress,
+      amount: maxBudget,
+      nonce: nonceData.nonce || 0,
+      currency: feeCurrency,
+      secretKey,
+    });
+
+    startCascadeWords();
+    const body = {
+      id: clientJobId, type,
+      payload: { ...(payload || {}), question: q, ...(atts?.length ? { attachments: atts } : {}) },
+      maxBudget, currency: feeCurrency, requesterAddress: selectedAddress, paymentTx,
+    };
+    if (skillId) body.skillId = skillId;
+    if (datasetId) body.dataset = datasetId;
+    const jobRes = await fetch(`${base}/job`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    stopCascadeWords(); // the polling loop below owns statusText from here (real status per tick)
+    const jobRef = await jobRes.json();
+    if (!jobRes.ok || !jobRef.jobId) throw new Error(jobRef.error || 'Failed to submit job.');
+
+    const jobId   = jobRef.jobId;
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+    while (true) {
+      if (Date.now() >= deadline) throw new Error('Job timed out (2 min). Try again.');
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+      const sRes = await fetch(`${base}/job/${jobId}/status`);
+      const st   = await sRes.json();
+      if (st.status === 'error') throw new Error(st.error || 'Job failed.');
+      if (st.status === 'done')  break;
+      setStatusText(`Computing... (${st.status})`);
+    }
+
+    setStatusText('Fetching result...');
+    const rRes  = await fetch(`${base}/job/${jobId}/result`);
+    const rData = await rRes.json();
+
+    if (type === 'skill') {
+      pushMsg({
+        role: 'ai', type: 'skill', skillId,
+        jobId:      rData?.jobId || jobId,
+        output:     rData?.profile?.skillOutput ?? rData,
+        text:       rData?.profile?.nlResponse || null,
+        tokensUsed: rData?.profile?.tokensUsed,
+        feedback:   null,
+      });
+    } else {
+      const reply = rData?.profile?.computeOutput || rData?.profile?.nlResponse || 'No response generated.';
+      pushMsg({
+        role: 'ai', type: 'chat', text: reply,
+        // Cosmetic only — carried over from askNode's free classification (see
+        // submitText) so the header still reads "AI · task cascade" etc.; the
+        // reply text itself always comes from this real, paid, gossiped job.
+        fromChainHistory: !!labelHint?.fromChainHistory,
+        cascade: !!(labelHint?.cascade || labelHint?.tasks),
+        skill: labelHint?.skill,
+        jobId: rData?.jobId || jobId,
+        feedbackPrompt: q,
+        feedback: null,
+      });
+    }
+    setStatusText('');
+  }
+
   // ── Submit ────────────────────────────────────────────────────────────────
   const submitText = async (q, { attachments: atts } = {}) => {
     if (!q && !(atts?.length)) return;
@@ -408,10 +513,19 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
     setLoading(true);
 
     try {
+      // askNode (/chat/ask) classifies the message for free — it's never shown to
+      // the user here. The one thing it's still needed for is the dataset-install
+      // interactive flow (a paid job has no human to ask mid-run) and knowing
+      // whether a community skill matched (which needs its own fee-confirmation
+      // dialog before paying). Every actual answer — including what askNode
+      // itself would have answered for free — gets submitted as its own real,
+      // paid, gossiped job: the free reply is discarded, not shown.
       if (atts?.length) setStatusText('Reading attachment…');
       else startCascadeWords();
       let { data: askData, base, datasetRequired } = await askNode(q, { attachments: atts });
       stopCascadeWords();
+
+      let forcedDatasetId = null;
 
       // Dataset approval loop (matches desktop HF_DATASET_DOWNLOAD_REQUIRED flow)
       if (datasetRequired && askData.datasetId) {
@@ -432,139 +546,43 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
         }
         setStatusText(`Downloading ${askData.datasetId}…`);
         await downloadDatasetOnNode(base, askData.datasetId);
-        startCascadeWords();
-        ({ data: askData, base } = await askNode(q, { attachments: atts, datasetId: askData.datasetId }));
-        stopCascadeWords();
+        forcedDatasetId = askData.datasetId;
       }
 
-      // Free chat / cascade / inline skill / hf-model all return type:'chat' with a message
-      if (askData.type === 'chat' || askData.message || askData.reply) {
-        const label = askData.cascade || askData.tasks
-          ? 'AI · task cascade'
-          : askData.skill
-            ? `AI · ${askData.skill}`
-            : askData.fromChainHistory
-              ? 'AI · from chain history'
-              : 'AI';
-        pushMsg({
-          role: 'ai', type: 'chat',
-          text: askData.message || askData.reply || '(no response)',
-          fromChainHistory: !!askData.fromChainHistory,
-          cascade: !!(askData.cascade || askData.tasks),
-          skill: askData.skill,
-          headerLabel: label,
-          // No paid /job backs most chat/cascade replies, so mint a client-side id —
-          // the feedback endpoint accepts prompt+reply as a fallback for one of these.
-          jobId: askData.jobId || `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          feedbackPrompt: q,
+      // Community skill needing a fee — askData.skillId came from askNode's free
+      // classification; it never actually ran the skill in this case.
+      if (askData.type === 'skill' && askData.skillId) {
+        const feeDecimals = feeCurrency === 'DAI' ? 1_000_000_000 : 100;
+        const maxBudget = Math.max(feeCurrency === 'DAI' ? 0 : 1, Math.round(budget * feeDecimals));
+        if (!(maxBudget > 0)) {
+          setFeeOpen(true);
+          Alert.alert('Fee Required', 'This question needs a real-time data skill. Set a fee using the slider and try again.');
+          return;
+        }
+        if (!selectedAddress) { pushMsg({ role: 'ai', error: true, text: 'Select a wallet to pay the skill fee.' }); return; }
+        if (feeCurrency === 'DAI' && budget > balance) { pushMsg({ role: 'ai', error: true, text: `Insufficient balance: ${balance.toFixed(2)} DAI available.` }); return; }
+
+        const payOk = await new Promise((resolve) => {
+          Alert.alert(
+            'Pay skill fee',
+            `Pay ${budget} ${feeCurrency} to this miner to run ${askData.skillId}?`,
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Pay', onPress: () => resolve(true) },
+            ],
+          );
         });
-        setSuggestions([]);
-        setHistoryBanner(null);
-        setStatusText('');
+        if (!payOk) {
+          pushMsg({ role: 'ai', type: 'chat', text: 'Skill fee declined.' });
+          return;
+        }
+        await submitPaidJob(q, base, { type: 'skill', skillId: askData.skillId, payload: askData.input || {} });
         return;
       }
 
-      // Skill path — budget converts at the fee currency's own decimals
-      const feeDecimals = feeCurrency === 'DAI' ? 1_000_000_000 : 100;
-      const maxBudget = Math.max(feeCurrency === 'DAI' ? 0 : 1, Math.round(budget * feeDecimals));
-      if (!(maxBudget > 0)) {
-        setFeeOpen(true);
-        Alert.alert('Fee Required', 'This question needs a real-time data skill. Set a fee using the slider and try again.');
-        return;
-      }
-      if (!selectedAddress) { pushMsg({ role: 'ai', error: true, text: 'Select a wallet to pay the skill fee.' }); return; }
-      if (feeCurrency === 'DAI' && budget > balance) { pushMsg({ role: 'ai', error: true, text: `Insufficient balance: ${balance.toFixed(2)} DAI available.` }); return; }
-
-      const payOk = await new Promise((resolve) => {
-        Alert.alert(
-          'Pay skill fee',
-          `Pay ${budget} ${feeCurrency} to this miner to run ${askData.skillId || 'this skill'}?`,
-          [
-            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-            { text: 'Pay', onPress: () => resolve(true) },
-          ],
-        );
-      });
-      if (!payOk) {
-        pushMsg({ role: 'ai', type: 'chat', text: 'Skill fee declined.' });
-        return;
-      }
-
-      // Fee-required job types need a signed payment proof (paymentTx) bound to
-      // jobId + miner + amount + nonce — the node rejects them with 402 otherwise.
-      setStatusText('Signing fee payment...');
-      const privateKeyHex = getPrivateKey ? await getPrivateKey(selectedAddress) : null;
-      if (!privateKeyHex) { pushMsg({ role: 'ai', error: true, text: 'Private key not found for this wallet.' }); return; }
-      const { secretKey, signingPublicKey } = await deriveSigningKeypair(privateKeyHex);
-
-      // Register signing key (idempotent) so the node can verify the proof
-      try {
-        await fetch(`${base}/api/wallet/register-key`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ address: selectedAddress, signingPublicKey, proof: signData(selectedAddress, secretKey) }),
-        });
-      } catch { /* non-fatal — submit will fail with a clear error if key missing */ }
-
-      const infoRes = await fetch(`${base}/api/miner/info`);
-      const info = await infoRes.json();
-      if (!info.minerAddress) throw new Error('Could not fetch miner address for payment proof.');
-
-      const nonceRes = await fetch(`${base}/api/wallet/nonce?address=${encodeURIComponent(selectedAddress)}`);
-      const nonceData = await nonceRes.json();
-      if (nonceData.error) throw new Error(nonceData.error);
-
-      const clientJobId = `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const paymentTx = await buildJobPaymentTx({
-        jobId: clientJobId,
-        requesterAddress: selectedAddress,
-        minerAddress: info.minerAddress,
-        amount: maxBudget,
-        nonce: nonceData.nonce || 0,
-        currency: feeCurrency,
-        secretKey,
-      });
-
-      startCascadeWords();
-      const jobRes = await fetch(`${base}/job`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: clientJobId,
-          type: 'skill', skillId: askData.skillId,
-          payload: { ...(askData.input || {}), question: q },
-          maxBudget, currency: feeCurrency, requesterAddress: selectedAddress,
-          paymentTx,
-        }),
-      });
-      stopCascadeWords(); // the polling loop below owns statusText from here (real status per tick)
-      const jobRef = await jobRes.json();
-      if (!jobRes.ok || !jobRef.jobId) throw new Error(jobRef.error || 'Failed to submit job.');
-
-      const jobId   = jobRef.jobId;
-      const deadline = Date.now() + POLL_TIMEOUT_MS;
-      while (true) {
-        if (Date.now() >= deadline) throw new Error('Job timed out (2 min). Try again.');
-        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
-        const sRes = await fetch(`${base}/job/${jobId}/status`);
-        const st   = await sRes.json();
-        if (st.status === 'error') throw new Error(st.error || 'Job failed.');
-        if (st.status === 'done')  break;
-        setStatusText(`Computing... (${st.status})`);
-      }
-
-      setStatusText('Fetching result...');
-      const rRes  = await fetch(`${base}/job/${jobId}/result`);
-      const rData = await rRes.json();
-      pushMsg({
-        role: 'ai', type: 'skill', skillId: askData.skillId,
-        jobId:      rData?.jobId || jobId,
-        output:     rData?.profile?.skillOutput ?? rData,
-        text:       rData?.profile?.nlResponse || null,
-        tokensUsed: rData?.profile?.tokensUsed,
-        feedback:   null,
-      });
-      setStatusText('');
+      // Everything else: free chat / cascade / inline skill / hf-model / dataset
+      // Q&A — all become a real paid compute job instead of askData's free reply.
+      await submitPaidJob(q, base, { type: 'compute', atts, datasetId: forcedDatasetId, labelHint: askData });
     } catch (err) {
       pushMsg({ role: 'ai', error: true, text: err.message || 'Something went wrong.' });
       setStatusText('');
