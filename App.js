@@ -7,6 +7,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts, Iceland_400Regular } from '@expo-google-fonts/iceland';
 import * as Clipboard from 'expo-clipboard';
@@ -53,6 +54,7 @@ import {
   MyOrdersScreen,
   ReferralScreen,
   ExplorerScreen,
+  LendScreen,
 } from './src/screens';
 
 // Keep the splash screen visible while we load fonts
@@ -85,6 +87,8 @@ AsyncStorage.setItem = (key, value, ...rest) => {
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
@@ -641,7 +645,8 @@ export default function DAIMinerWallet() {
         }
         // Get Expo push token and upload to the active node so the server
         // can send custom push messages to this wallet.
-        const tokenData = await Notifications.getExpoPushTokenAsync();
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId || Constants.easConfig?.projectId;
+        const tokenData = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
         const token = tokenData?.data;
         if (token) {
           await AsyncStorage.setItem('dai_push_token', token);
@@ -1688,6 +1693,7 @@ export default function DAIMinerWallet() {
             {settingsMenuRow(t('settings.language_tab'), lang ? lang.nativeName : language, () => setSettingsTab('language'))}
             {settingsMenuRow(t('settings.display_currency'), displayCurrency, () => setSettingsTab('display'))}
             {settingsMenuRow(t('settings.wallets_tab'), null, () => setSettingsTab('wallets'))}
+            {settingsMenuRow(t('settings.lend_tab'), t('settings.lend_sub'), () => setSettingsTab('lend'))}
             {settingsMenuRow(t('settings.danger_tab'), null, () => setSettingsTab('danger'))}
           </ScrollView>
           <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
@@ -1704,7 +1710,9 @@ export default function DAIMinerWallet() {
         </TouchableOpacity>
 
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 140, paddingHorizontal: 10 }} keyboardShouldPersistTaps="handled">
-          {settingsTab === 'nodes' ? (
+          {settingsTab === 'lend' ? (
+            <LendScreen t={t} />
+          ) : settingsTab === 'nodes' ? (
             <>
               <Text style={{ color: '#4b5563', marginBottom: 12, fontSize: 13, fontFamily: 'Iceland_400Regular', lineHeight: 19 }}>
                 {t('settings.nodes_desc')}

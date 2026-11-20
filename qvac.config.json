@@ -1,0 +1,6 @@
+{
+  "plugins": [],
+  "rpcServerProvider": "@qvac/sdk/ggml-rpc-server/provider",
+  "includeAudioDecoder": false,
+  "loggerLevel": "warn"
+}
