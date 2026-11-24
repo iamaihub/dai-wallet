@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { fetchChatSuggestions, fetchHistoryMatch } from '../services/nodeClient';
+import { presentChatReply, proseFromValue, requestedReplyFormat } from '../services/chat-reply';
 import { deriveSigningKeypair, signData, buildJobPaymentTx } from '../services/signing';
 import { STABLE_TICKERS, assetMeta } from '../constants/assets';
 import CurrencyPicker from '../components/CurrencyPicker';
@@ -476,16 +477,26 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
     const rData = await rRes.json();
 
     if (type === 'skill') {
+      const skillOutput = rData?.profile?.skillOutput ?? rData;
+      const nl = rData?.profile?.nlResponse;
       pushMsg({
         role: 'ai', type: 'skill', skillId,
         jobId:      rData?.jobId || jobId,
-        output:     rData?.profile?.skillOutput ?? rData,
-        text:       rData?.profile?.nlResponse || null,
+        output:     skillOutput,
+        prompt:     q,
+        text:       nl
+          ? presentChatReply(q, nl)
+          : (requestedReplyFormat(q) === 'json'
+              ? null
+              : presentChatReply(q, typeof skillOutput === 'string' ? skillOutput : JSON.stringify(skillOutput ?? ''))),
         tokensUsed: rData?.profile?.tokensUsed,
         feedback:   null,
       });
     } else {
-      const reply = rData?.profile?.computeOutput || rData?.profile?.nlResponse || 'No response generated.';
+      const reply = presentChatReply(
+        q,
+        rData?.profile?.computeOutput || rData?.profile?.nlResponse || 'No response generated.',
+      );
       pushMsg({
         role: 'ai', type: 'chat', text: reply,
         // Cosmetic only — carried over from askNode's free classification (see
@@ -618,7 +629,9 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
 
   const copyMessage = async (msg) => {
     const text = msg.text
-      || (typeof msg.output === 'string' ? msg.output : JSON.stringify(msg.output, null, 2));
+      || (requestedReplyFormat(msg.prompt) === 'json'
+        ? (typeof msg.output === 'string' ? msg.output : JSON.stringify(msg.output, null, 2))
+        : proseFromValue(msg.output));
     if (!text) return;
     await Clipboard.setStringAsync(text);
     Alert.alert('Copied', 'Response copied to clipboard');
@@ -672,7 +685,7 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
     }
   };
 
-  const renderSkillOutput = (output) => {
+  const renderSkillOutput = (output, prompt) => {
     if (output == null) return null;
     if (typeof output === 'string') return renderMarkdown(output);
     if (output.analysis?.summary) {
@@ -695,7 +708,10 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
         </>
       );
     }
-    return <Text style={s.codeText}>{JSON.stringify(output, null, 2)}</Text>;
+    if (requestedReplyFormat(prompt) === 'json') {
+      return <Text style={s.codeText}>{typeof output === 'string' ? output : JSON.stringify(output, null, 2)}</Text>;
+    }
+    return renderMarkdown(proseFromValue(output));
   };
 
   const renderAiBubble = (msg) => {
@@ -730,7 +746,7 @@ export default function ChatScreen({ activeNodeUrl, nodes = [], selectedAddress,
             </TouchableOpacity>
           </View>
 
-          {msg.text ? renderMarkdown(msg.text) : renderSkillOutput(msg.output)}
+          {msg.text ? renderMarkdown(msg.text) : renderSkillOutput(msg.output, msg.prompt)}
 
           {canRate && (
             msg.feedback ? (

@@ -1,0 +1,26 @@
+plugins {
+  id "com.android.library"
+}
+
+if (findProperty("android.builtInKotlin") == "false") {
+  apply plugin: "org.jetbrains.kotlin.android"
+}
+
+android {
+  namespace = "io.tether.qvac.sdk.addons"
+  compileSdk = 36
+
+  defaultConfig {
+    minSdk = 29
+  }
+
+  sourceSets {
+    main {
+      jniLibs.directories.add("src/main/addons")
+    }
+  }
+}
+
+dependencies {
+  api "com.github.holepunchto.bare-kit-kotlin:bare-kit-kotlin:v0.2.2"
+}
