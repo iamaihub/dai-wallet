@@ -18,6 +18,7 @@ import {
   TextInput, Platform,
 } from 'react-native';
 import { ASSETS, ONCHAIN_ASSETS } from '../constants/assets';
+import { useChromeInsets, CONTENT_TOP_GAP } from './Screen';
 
 export const ALL = 'All';
 const ROW_H = 56;
@@ -66,6 +67,7 @@ export default function CurrencyPicker({
   label = null,
   placeholder = 'Select',
 }) {
+  const chrome = useChromeInsets();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -128,7 +130,7 @@ export default function CurrencyPicker({
       </TouchableOpacity>
 
       <Modal visible={open} animationType="slide" onRequestClose={close} transparent={false}>
-        <View style={s.modal}>
+        <View style={[s.modal, { paddingTop: chrome.top + CONTENT_TOP_GAP, paddingBottom: chrome.bottom }]}>
           <View style={s.searchRow}>
             <TextInput
               style={s.search}
@@ -175,7 +177,7 @@ const s = StyleSheet.create({
   triggerText: { color: '#22c55e', fontSize: 15, fontFamily: 'Iceland_400Regular', lineHeight: 20 },
   triggerChevron: { color: '#666', fontSize: 12 },
 
-  modal: { flex: 1, backgroundColor: '#0a0a0a', paddingTop: Platform.OS === 'ios' ? 56 : 16 },
+  modal: { flex: 1, backgroundColor: '#0a0a0a' },
   searchRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 8 },
   search: {
     flex: 1, height: 42, borderRadius: 10, borderWidth: 1, borderColor: '#333',

@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TextInput, Alert, TouchableOpacity,
-  FlatList, ActivityIndicator, SafeAreaView, StatusBar, ScrollView, Platform, Modal
+  FlatList, ActivityIndicator, StatusBar, ScrollView, Platform, Modal
 } from 'react-native';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
@@ -18,7 +19,7 @@ const DAI_DECIMALS = 1_000_000_000;
 
 // === Clean imports from the new structured src/ ===
 import { STORAGE_KEYS, DEFAULT_WALLET_NODES } from './src/constants';
-import { createTranslator, detectDefaultLanguage, SUPPORTED_LANGUAGES } from './src/i18n';
+import { createTranslator, detectDefaultLanguage, normalizeLanguageCode, SUPPORTED_LANGUAGES } from './src/i18n';
 import {
   deriveFromPrivateKey,
   generateNewWallet,
@@ -39,6 +40,7 @@ import {
 import * as Storage from './src/services/storage';
 
 import { Header, TabBar, SegmentedControl } from './src/components';
+import { Screen, useChromeInsets, CONTENT_TOP_GAP } from './src/components/Screen';
 import {
   HomeScreen,
   SendScreen,
@@ -130,10 +132,11 @@ async function showNotification(title, body) {
 // === Old duplicated storage / node functions removed ===
 // Now using src/services/storage.js and src/services/nodeClient.js
 
-export default function DAIMinerWallet() {
+function DAIMinerWallet() {
   const [fontsLoaded] = useFonts({
     Iceland_400Regular,
   });
+  const chrome = useChromeInsets();
 
   const [currentScreen, setCurrentScreen] = useState('home');
   const [p2pScreen, setP2pScreen] = useState('p2p'); // 'p2p' | 'createOrder' | 'orderDetail' | 'trade' | 'myOrders' | 'pair'
@@ -311,10 +314,12 @@ export default function DAIMinerWallet() {
 
       if (lTxStr) setLocalPendingTxs(JSON.parse(lTxStr));
 
-      // Language
-      const loadedLang = await Storage.loadLanguage();
+      // Language. Map codes saved by older builds (zh, ar, fa) onto the shared list.
+      const storedLang = await Storage.loadLanguage();
+      const loadedLang = storedLang ? normalizeLanguageCode(storedLang) : '';
       if (loadedLang && SUPPORTED_LANGUAGES.some(l => l.code === loadedLang)) {
         setLanguage(loadedLang);
+        if (loadedLang !== storedLang) await Storage.saveLanguage(loadedLang);
       } else {
         // First run or invalid: auto-detect
         const detected = detectDefaultLanguage();
@@ -719,7 +724,7 @@ export default function DAIMinerWallet() {
   if (!fontsLoaded) {
     return (
       <View style={{ flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}>
-        <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         <ActivityIndicator color="#fff" size="large" />
       </View>
     );
@@ -1181,7 +1186,7 @@ export default function DAIMinerWallet() {
 
   if (currentScreen === 'home') {
     return (
-      <SafeAreaView style={styles.container} onLayout={onLayoutRootView}>
+      <Screen onLayout={onLayoutRootView}>
         <StatusBar barStyle="light-content" />
         <Header t={t} onSettingsPress={openSettings} />
 
@@ -1332,7 +1337,7 @@ export default function DAIMinerWallet() {
             </TouchableOpacity>
           </TouchableOpacity>
         </Modal>
-      </SafeAreaView>
+      </Screen>
     );
   }
 
@@ -1340,7 +1345,7 @@ export default function DAIMinerWallet() {
     const fee = 0;  // actual fee in buildSignedTransaction and tx is 0; node may charge separately or 0
     const amountNum = parseFloat(sendAmount) || 0;
     return (
-      <SafeAreaView style={styles.container} onLayout={onLayoutRootView}>
+      <Screen onLayout={onLayoutRootView}>
         <StatusBar barStyle="light-content" />
         <Header title={t('send.title')} t={t} onSettingsPress={openSettings} />
         <ScrollView contentContainerStyle={{ paddingBottom: 100, paddingHorizontal: 10 }} keyboardShouldPersistTaps="handled">
@@ -1449,7 +1454,7 @@ export default function DAIMinerWallet() {
         {/* QR Scanner Modal */}
         <Modal visible={sendQrVisible} transparent={false} animationType="slide" onRequestClose={() => setSendQrVisible(false)}>
           <View style={{ flex: 1, backgroundColor: '#000' }}>
-            <View style={styles.qrModalHeader}>
+            <View style={[styles.qrModalHeader, { paddingTop: chrome.top + CONTENT_TOP_GAP }]}>
               <Text style={styles.qrModalTitle}>Scan DAI Address</Text>
             </View>
             {sendCamPermission?.granted ? (
@@ -1473,20 +1478,20 @@ export default function DAIMinerWallet() {
             <View style={styles.qrAimOverlay} pointerEvents="none">
               <View style={styles.qrAimBox} />
             </View>
-            <TouchableOpacity style={styles.qrModalClose} onPress={() => setSendQrVisible(false)}>
+            <TouchableOpacity style={[styles.qrModalClose, { bottom: chrome.bottom + 16 }]} onPress={() => setSendQrVisible(false)}>
               <Text style={styles.qrModalCloseText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </Modal>
 
         <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
   if (currentScreen === 'receive') {
     return (
-      <SafeAreaView style={styles.container}>
+      <Screen>
         <StatusBar barStyle="light-content" />
         <Header title={t('receive.title')} t={t} onSettingsPress={openSettings} />
 
@@ -1513,13 +1518,13 @@ export default function DAIMinerWallet() {
           <Text style={{ color: '#6b7280', fontFamily: 'Iceland_400Regular', lineHeight: 20 }}>{t('receive.back')}</Text>
         </TouchableOpacity>
         <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
   if (currentScreen === 'history') {
     return (
-      <SafeAreaView style={styles.container}>
+      <Screen>
         <StatusBar barStyle="light-content" />
         <Header title={t('history.title')} t={t} onSettingsPress={openSettings} />
         <FlatList
@@ -1576,26 +1581,26 @@ export default function DAIMinerWallet() {
           }
         />
         <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
   if (currentScreen === 'explorer') {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }} onLayout={onLayoutRootView}>
-        <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <Screen onLayout={onLayoutRootView}>
+        <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         <ExplorerScreen
           activeNodeUrl={activeNodeUrl}
           onNavigate={(screen) => setCurrentScreen(screen)}
         />
         <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
   if (currentScreen === 'wallets') {
     return (
-      <SafeAreaView style={styles.container} onLayout={onLayoutRootView}>
+      <Screen onLayout={onLayoutRootView}>
         <StatusBar barStyle="light-content" />
         <Header title={t('wallets.title')} t={t} onSettingsPress={openSettings} />
         <ScrollView contentContainerStyle={{ paddingBottom: 100, paddingHorizontal: 10 }} keyboardShouldPersistTaps="handled">
@@ -1644,13 +1649,13 @@ export default function DAIMinerWallet() {
           </TouchableOpacity>
         </ScrollView>
         <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
   if (currentScreen === 'chat') {
     return (
-      <SafeAreaView style={styles.container} onLayout={onLayoutRootView}>
+      <Screen onLayout={onLayoutRootView}>
         <StatusBar barStyle="light-content" />
         <Header title="Ask AI" t={t} onSettingsPress={openSettings} />
         <View style={{ flex: 1, backgroundColor: '#000' }}>
@@ -1663,7 +1668,7 @@ export default function DAIMinerWallet() {
           />
         </View>
         <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
@@ -1685,7 +1690,7 @@ export default function DAIMinerWallet() {
     if (settingsTab === 'menu') {
       const lang = SUPPORTED_LANGUAGES.find(l => l.code === language);
       return (
-        <SafeAreaView style={styles.container} onLayout={onLayoutRootView}>
+        <Screen onLayout={onLayoutRootView}>
           <StatusBar barStyle="light-content" />
           <Header title={t('settings.title')} t={t} onSettingsPress={openSettings} />
           <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 140, paddingHorizontal: 10 }}>
@@ -1697,12 +1702,12 @@ export default function DAIMinerWallet() {
             {settingsMenuRow(t('settings.danger_tab'), null, () => setSettingsTab('danger'))}
           </ScrollView>
           <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-        </SafeAreaView>
+        </Screen>
       );
     }
 
     return (
-      <SafeAreaView style={styles.container} onLayout={onLayoutRootView}>
+      <Screen onLayout={onLayoutRootView}>
         <StatusBar barStyle="light-content" />
         <Header title={t('settings.title')} t={t} onSettingsPress={openSettings} />
         <TouchableOpacity onPress={() => setSettingsTab('menu')} style={{ paddingHorizontal: 10, paddingBottom: 10 }}>
@@ -1923,7 +1928,7 @@ export default function DAIMinerWallet() {
         </TouchableOpacity>
 
         <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
@@ -1947,42 +1952,42 @@ export default function DAIMinerWallet() {
 
     if (p2pScreen === 'createOrder') {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }} onLayout={onLayoutRootView}>
-          <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <Screen onLayout={onLayoutRootView}>
+          <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
           <CreateOrderScreen {...commonProps} defaultSide={p2pParams.defaultSide || 'sell'} />
           <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-        </SafeAreaView>
+        </Screen>
       );
     }
 
     if (p2pScreen === 'orderDetail' || p2pScreen === 'trade') {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }} onLayout={onLayoutRootView}>
-          <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <Screen onLayout={onLayoutRootView}>
+          <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
           <TradeScreen
             {...commonProps}
             orderId={p2pParams.orderId}
             tradeId={p2pParams.tradeId}
           />
           <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-        </SafeAreaView>
+        </Screen>
       );
     }
 
     if (p2pScreen === 'myOrders') {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }} onLayout={onLayoutRootView}>
-          <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <Screen onLayout={onLayoutRootView}>
+          <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
           <MyOrdersScreen {...commonProps} />
           <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-        </SafeAreaView>
+        </Screen>
       );
     }
 
     if (p2pScreen === 'pair') {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }} onLayout={onLayoutRootView}>
-          <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <Screen onLayout={onLayoutRootView}>
+          <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
           <Header title="Pair a site" t={t} onSettingsPress={openSettings} />
           <PairScreen
             wallets={wallets}
@@ -1991,36 +1996,43 @@ export default function DAIMinerWallet() {
             t={t}
           />
           <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-        </SafeAreaView>
+        </Screen>
       );
     }
 
     if (p2pScreen === 'referral') {
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }} onLayout={onLayoutRootView}>
-          <StatusBar barStyle="light-content" backgroundColor="#000" />
+        <Screen onLayout={onLayoutRootView}>
+          <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
           <ReferralScreen {...commonProps} />
           <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-        </SafeAreaView>
+        </Screen>
       );
     }
 
     // Default: order book
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }} onLayout={onLayoutRootView}>
-        <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <Screen onLayout={onLayoutRootView}>
+        <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         <P2PScreen key={p2pFilter || 'all'} {...commonProps} initialCurrency={p2pFilter} />
         <TabBar currentScreen={currentScreen} onTabPress={handleTabPress} t={t} />
-      </SafeAreaView>
+      </Screen>
     );
   }
 
   return null;
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000', paddingTop: 50, paddingBottom: 95 },
+export default function App() {
+  return (
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+      <DAIMinerWallet />
+    </SafeAreaProvider>
+  );
+}
 
+const styles = StyleSheet.create({
   // Header
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingHorizontal: 10 },
   title: { fontSize: 20, color: '#fff', fontFamily: 'Iceland_400Regular', lineHeight: 29 },
@@ -2146,7 +2158,7 @@ const styles = StyleSheet.create({
 
   // QR scanner modal
   qrModalHeader: {
-    paddingTop: 56, paddingBottom: 16, paddingHorizontal: 20,
+    paddingBottom: 16, paddingHorizontal: 20,
     backgroundColor: '#000',
   },
   qrModalTitle: { color: '#fff', fontSize: 18, fontFamily: 'Iceland_400Regular', lineHeight: 26 },
@@ -2161,7 +2173,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   qrModalClose: {
-    position: 'absolute', bottom: 40, alignSelf: 'center',
+    position: 'absolute', alignSelf: 'center',
     paddingVertical: 12, paddingHorizontal: 36,
     backgroundColor: '#111', borderRadius: 10, borderWidth: 1, borderColor: '#2a2a2a',
   },

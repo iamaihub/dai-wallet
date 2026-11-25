@@ -6,6 +6,7 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseClusterCode, startLending, stopLending } from '../services/cluster';
+import { useChromeInsets } from '../components/Screen';
 
 const TOPIC_KEY = 'dai_cluster_topic';
 
@@ -14,6 +15,7 @@ const TOPIC_KEY = 'dai_cluster_topic';
  * It scans the code from Settings → Devices and starts a QVAC RPC worker.
  */
 export default function LendScreen({ t }) {
+  const chrome = useChromeInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [cameraVisible, setCameraVisible] = useState(false);
   const [scanned, setScanned] = useState(false);
@@ -146,7 +148,7 @@ export default function LendScreen({ t }) {
             barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
             onBarcodeScanned={scanned ? undefined : onBarcodeScanned}
           />
-          <TouchableOpacity style={styles.camClose} onPress={() => setCameraVisible(false)}>
+          <TouchableOpacity style={[styles.camClose, { bottom: chrome.bottom + 16 }]} onPress={() => setCameraVisible(false)}>
             <Text style={styles.primaryText}>{t('settings.lend_cancel')}</Text>
           </TouchableOpacity>
         </View>
@@ -172,5 +174,5 @@ const styles = StyleSheet.create({
   stop: { flex: 1, backgroundColor: '#7f1d1d', borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
   stopText: { color: '#fff', fontFamily: 'Iceland_400Regular', fontSize: 15 },
   note: { color: '#6b7280', marginTop: 14, fontSize: 13, lineHeight: 18, fontFamily: 'Iceland_400Regular' },
-  camClose: { position: 'absolute', bottom: 40, alignSelf: 'center', backgroundColor: '#22c55e', paddingHorizontal: 22, paddingVertical: 12, borderRadius: 8 },
+  camClose: { position: 'absolute', alignSelf: 'center', backgroundColor: '#22c55e', paddingHorizontal: 22, paddingVertical: 12, borderRadius: 8 },
 });
