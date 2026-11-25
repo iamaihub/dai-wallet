@@ -9,16 +9,39 @@ import { translations } from './translations';
 
 export { SUPPORTED_LANGUAGES };
 
+// Older builds stored ISO codes. The site uses cn / arab / farsi / hk.
+const CODE_ALIAS = {
+  zh: 'cn', cn: 'cn', yue: 'hk', hk: 'hk',
+  ar: 'arab', arab: 'arab',
+  fa: 'farsi', farsi: 'farsi', pes: 'farsi',
+};
+
+export function normalizeLanguageCode(code) {
+  const raw = String(code || '').toLowerCase().replace(/_/g, '-');
+  if (!raw) return 'en';
+  if (
+    raw.startsWith('zh-hk') || raw.startsWith('zh-mo') || raw.startsWith('zh-tw') ||
+    raw.startsWith('zh-hant') || raw.startsWith('yue')
+  ) return 'hk';
+  if (raw === 'en-sg' || raw.startsWith('en-sg')) return 'sg';
+  if (CODE_ALIAS[raw]) return CODE_ALIAS[raw];
+  const primary = raw.split('-')[0];
+  if (primary === 'zh') return 'cn';
+  if (CODE_ALIAS[primary]) return CODE_ALIAS[primary];
+  return primary;
+}
+
 const warnedLanguages = new Set();
 
 export function createTranslator(lang) {
+  const code = normalizeLanguageCode(lang);
   return (key, params = {}) => {
-    const hasLang = !!translations[lang];
-    const dict = hasLang ? translations[lang] : (translations.en || {});
+    const hasLang = !!translations[code];
+    const dict = hasLang ? translations[code] : (translations.en || {});
 
-    if (!hasLang && lang !== 'en' && !warnedLanguages.has(lang)) {
-      warnedLanguages.add(lang);
-      console.warn(`[i18n] No full translations found for language "${lang}". Falling back to English. (Add data to src/i18n/translations.js)`);
+    if (!hasLang && code !== 'en' && !warnedLanguages.has(code)) {
+      warnedLanguages.add(code);
+      console.warn(`[i18n] No full translations found for language "${code}". Falling back to English. (Add data to src/i18n/translations.js)`);
     }
 
     let str = dict[key] !== undefined
@@ -47,9 +70,7 @@ export function detectDefaultLanguage() {
       locale = NativeModules.I18nManager?.localeIdentifier || 'en_US';
     }
 
-    let code = String(locale || 'en').toLowerCase().split(/[-_]/)[0];
-    if (code === 'zh' || code === 'cn') code = 'zh';
-
+    const code = normalizeLanguageCode(locale);
     const supported = SUPPORTED_LANGUAGES.find(l => l.code === code);
     return supported ? code : 'en';
   } catch {
