@@ -42,10 +42,14 @@ echo "   This is a full native Gradle build — first run with a cold cache can 
 # prebuilt project) and sometimes times out reaching exp.host. Either way the
 # local build run continues past a failed doctor check; this is not a sign
 # the build itself is broken.
+# ~/.gradle/gradle.properties sets a 4GB daemon heap. On this 16GB machine that
+# heap, plus Kotlin compiler daemons, gets the release R8 step OOM-killed.
+# A command-line system property outranks the user-home file.
 EAS_NO_VCS=1 \
 ANDROID_HOME="$ANDROID_SDK" \
 ANDROID_SDK_ROOT="$ANDROID_SDK" \
-npx eas build --platform android --profile preview --local --non-interactive \
+GRADLE_OPTS='-Dorg.gradle.jvmargs="-Xmx2048m -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError" -Dkotlin.daemon.jvmargs="-Xmx1024m -XX:MaxMetaspaceSize=256m"' \
+npx --yes eas-cli build --platform android --profile preview --local --non-interactive \
   --output "$OUT_APK"
 
 echo ""
